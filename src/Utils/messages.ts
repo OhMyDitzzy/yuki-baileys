@@ -1408,10 +1408,6 @@ async function prepareStickerPackMessage(
 ): Promise<proto.IMessage> {
 	const { stickers, name, publisher, packId, description } = stickerPack
 
-	if (stickers.length > 60) {
-		throw new Boom('Sticker pack exceeds the maximum limit of 60 stickers', { statusCode: 400 })
-	}
-
 	if (stickers.length === 0) {
 		throw new Boom('Sticker pack must contain at least one sticker', { statusCode: 400 })
 	}
