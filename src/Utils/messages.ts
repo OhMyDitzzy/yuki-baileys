@@ -20,6 +20,7 @@ import type {
 	MessageGenerationOptionsFromContent,
 	MessageUserReceipt,
 	MessageWithContextInfo,
+	StickerPack,
 	WAMediaUpload,
 	WAMessage,
 	WAMessageContent,
@@ -37,7 +38,10 @@ import {
 	generateThumbnail,
 	getAudioDuration,
 	getAudioWaveform,
+	getImageProcessingLibrary,
 	getRawMediaUploadData,
+	getStream,
+	toBuffer,
 	type MediaDownloadOptions
 } from './messages-media'
 
@@ -461,6 +465,8 @@ export const generateWAMessageContent = async (
 				}
 			}
 		}
+	} else if ('stickerPack' in message) {
+		m = await prepareStickerPackMessage(message.stickerPack, options)
 	} else if ('pin' in message) {
 		m.pinInChatMessage = {}
 		m.messageContextInfo = {}
@@ -1059,4 +1065,331 @@ export const assertMediaContent = (content: proto.IMessage | null | undefined) =
 	}
 
 	return mediaContent
+}
+
+
+/**
+ * Checks if a WebP buffer is animated by looking for VP8X chunk with animation flag
+ * or ANIM/ANMF chunks
+ */
+function isAnimatedWebP(buffer: Buffer): boolean {
+	// WebP must start with RIFF....WEBP
+	if (
+		buffer.length < 12 ||
+		buffer[0] !== 0x52 ||
+		buffer[1] !== 0x49 ||
+		buffer[2] !== 0x46 ||
+		buffer[3] !== 0x46 ||
+		buffer[8] !== 0x57 ||
+		buffer[9] !== 0x45 ||
+		buffer[10] !== 0x42 ||
+		buffer[11] !== 0x50
+	) {
+		return false
+	}
+
+	// Parse chunks starting after RIFF header (12 bytes)
+	let offset = 12
+	while (offset < buffer.length - 8) {
+		const chunkFourCC = buffer.toString('ascii', offset, offset + 4)
+		const chunkSize = buffer.readUInt32LE(offset + 4)
+
+		if (chunkFourCC === 'VP8X') {
+			// VP8X extended header, check animation flag (bit 1 at offset+8)
+			const flagsOffset = offset + 8
+			if (flagsOffset < buffer.length) {
+				const flags = buffer[flagsOffset]!
+				if (flags & 0x02) {
+					return true
+				}
+			}
+		} else if (chunkFourCC === 'ANIM' || chunkFourCC === 'ANMF') {
+			// ANIM or ANMF chunks indicate animation
+			return true
+		}
+
+		// Move to next chunk (chunk size + 8 bytes header, padded to even)
+		offset += 8 + chunkSize + (chunkSize % 2)
+	}
+
+	return false
+}
+
+/**
+ * Checks if a buffer is a WebP file
+ */
+function isWebPBuffer(buffer: Buffer): boolean {
+	return (
+		buffer.length >= 12 &&
+		buffer[0] === 0x52 &&
+		buffer[1] === 0x49 &&
+		buffer[2] === 0x46 &&
+		buffer[3] === 0x46 &&
+		buffer[8] === 0x57 &&
+		buffer[9] === 0x45 &&
+		buffer[10] === 0x42 &&
+		buffer[11] === 0x50
+	)
+}
+
+/**
+ * Creates a ZIP file buffer manually without external dependencies
+ * Only supports STORE method (no compression) which is perfect for already-compressed WebP files
+ */
+function createZipBuffer(files: Record<string, Uint8Array>): Buffer {
+	const encoder = new TextEncoder()
+	const centralDirectory: Buffer[] = []
+	const fileData: Buffer[] = []
+	let offset = 0
+
+	for (const [fileName, data] of Object.entries(files)) {
+		const fileNameBytes = encoder.encode(fileName)
+		const fileNameLength = fileNameBytes.length
+		const uncompressedSize = data.length
+		const compressedSize = data.length // STORE = no compression
+		const crc32 = calculateCRC32(data)
+
+		// Local file header
+		const localHeader = Buffer.alloc(30 + fileNameLength)
+		localHeader.writeUInt32LE(0x04034b50, 0) // Local file header signature
+		localHeader.writeUInt16LE(20, 4) // Version needed to extract (2.0)
+		localHeader.writeUInt16LE(0, 6) // General purpose bit flag
+		localHeader.writeUInt16LE(0, 8) // Compression method (0 = STORE)
+		localHeader.writeUInt16LE(0, 10) // File last modification time
+		localHeader.writeUInt16LE(0, 12) // File last modification date
+		localHeader.writeUInt32LE(crc32, 14) // CRC-32
+		localHeader.writeUInt32LE(compressedSize, 18) // Compressed size
+		localHeader.writeUInt32LE(uncompressedSize, 22) // Uncompressed size
+		localHeader.writeUInt16LE(fileNameLength, 26) // File name length
+		localHeader.writeUInt16LE(0, 28) // Extra field length
+		localHeader.set(fileNameBytes, 30) // File name
+
+		fileData.push(localHeader)
+		fileData.push(Buffer.from(data))
+
+		// Central directory header
+		const centralHeader = Buffer.alloc(46 + fileNameLength)
+		centralHeader.writeUInt32LE(0x02014b50, 0) // Central directory signature
+		centralHeader.writeUInt16LE(20, 4) // Version made by
+		centralHeader.writeUInt16LE(20, 6) // Version needed to extract
+		centralHeader.writeUInt16LE(0, 8) // General purpose bit flag
+		centralHeader.writeUInt16LE(0, 10) // Compression method
+		centralHeader.writeUInt16LE(0, 12) // Last mod file time
+		centralHeader.writeUInt16LE(0, 14) // Last mod file date
+		centralHeader.writeUInt32LE(crc32, 16) // CRC-32
+		centralHeader.writeUInt32LE(compressedSize, 20) // Compressed size
+		centralHeader.writeUInt32LE(uncompressedSize, 24) // Uncompressed size
+		centralHeader.writeUInt16LE(fileNameLength, 28) // File name length
+		centralHeader.writeUInt16LE(0, 30) // Extra field length
+		centralHeader.writeUInt16LE(0, 32) // File comment length
+		centralHeader.writeUInt16LE(0, 34) // Disk number start
+		centralHeader.writeUInt16LE(0, 36) // Internal file attributes
+		centralHeader.writeUInt32LE(0, 38) // External file attributes
+		centralHeader.writeUInt32LE(offset, 42) // Relative offset of local header
+		centralHeader.set(fileNameBytes, 46) // File name
+
+		centralDirectory.push(centralHeader)
+
+		offset += localHeader.length + data.length
+	}
+
+	const centralDirBuffer = Buffer.concat(centralDirectory)
+	const centralDirSize = centralDirBuffer.length
+	const totalFiles = Object.keys(files).length
+
+	// End of central directory record
+	const endOfCentralDir = Buffer.alloc(22)
+	endOfCentralDir.writeUInt32LE(0x06054b50, 0) // End of central dir signature
+	endOfCentralDir.writeUInt16LE(0, 4) // Number of this disk
+	endOfCentralDir.writeUInt16LE(0, 6) // Disk where central directory starts
+	endOfCentralDir.writeUInt16LE(totalFiles, 8) // Number of central directory records on this disk
+	endOfCentralDir.writeUInt16LE(totalFiles, 10) // Total number of central directory records
+	endOfCentralDir.writeUInt32LE(centralDirSize, 12) // Size of central directory
+	endOfCentralDir.writeUInt32LE(offset, 16) // Offset of start of central directory
+	endOfCentralDir.writeUInt16LE(0, 20) // Comment length
+
+	return Buffer.concat([...fileData, centralDirBuffer, endOfCentralDir])
+}
+
+/**
+ * Calculate CRC32 checksum
+ */
+function calculateCRC32(data: Uint8Array): number {
+	let crc = 0xffffffff
+
+	for (let i = 0; i < data.length; i++) {
+		crc = crc ^ data[i]!
+		for (let j = 0; j < 8; j++) {
+			crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1))
+		}
+	}
+
+	return (crc ^ 0xffffffff) >>> 0
+}
+
+async function prepareStickerPackMessage(
+	stickerPack: StickerPack,
+	options: MessageContentGenerationOptions
+): Promise<proto.IMessage> {
+	const { stickers, name, publisher, packId, description } = stickerPack
+
+	if (stickers.length > 60) {
+		throw new Boom('Sticker pack exceeds the maximum limit of 60 stickers', { statusCode: 400 })
+	}
+
+	if (stickers.length === 0) {
+		throw new Boom('Sticker pack must contain at least one sticker', { statusCode: 400 })
+	}
+
+	const stickerPackIdValue = packId || generateMessageIDV2()
+
+	const lib = await getImageProcessingLibrary()
+	const stickerData: Record<string, [Uint8Array, { level: 0 }]> = {}
+	const stickerPromises = stickers.map(async (s, i) => {
+		const { stream } = await getStream(s.data)
+		const buffer = await toBuffer(stream)
+
+		let webpBuffer: Buffer
+		let isAnimated = false
+		const isWebP = isWebPBuffer(buffer)
+
+		if (isWebP) {
+			// Already WebP - preserve original to keep exif metadata and animation
+			webpBuffer = buffer
+			isAnimated = isAnimatedWebP(buffer)
+		} else if ('sharp' in lib && lib.sharp) {
+			// Convert to WebP, preserving metadata
+			webpBuffer = await lib.sharp.default(buffer).webp().toBuffer()
+			// Non-WebP inputs converted to WebP are not animated
+			isAnimated = false
+		} else {
+			throw new Boom(
+				'No image processing library (sharp) available for converting sticker to WebP. Either install sharp or provide stickers in WebP format.'
+			)
+		}
+
+		if (webpBuffer.length > 1024 * 1024) {
+			throw new Boom(`Sticker at index ${i} exceeds the 1MB size limit`, { statusCode: 400 })
+		}
+
+		const hash = sha256(webpBuffer).toString('base64').replace(/\//g, '-')
+		const fileName = `${hash}.webp`
+		stickerData[fileName] = [new Uint8Array(webpBuffer), { level: 0 as 0 }]
+		return {
+			fileName,
+			mimetype: 'image/webp',
+			isAnimated,
+			emojis: s.emojis || [],
+			accessibilityLabel: s.accessibilityLabel
+		}
+	})
+
+	const stickerMetadata = await Promise.all(stickerPromises)
+
+	// Process and add cover/tray icon to the ZIP
+	const trayIconFileName = `${stickerPackIdValue}.webp`
+	const { stream: coverStream } = await getStream(stickerPack.cover)
+	const coverBuffer = await toBuffer(coverStream)
+
+	let coverWebpBuffer: Buffer
+	const isCoverWebP = isWebPBuffer(coverBuffer)
+
+	if (isCoverWebP) {
+		// Already WebP - preserve original to keep exif metadata
+		coverWebpBuffer = coverBuffer
+	} else if ('sharp' in lib && lib.sharp) {
+		coverWebpBuffer = await lib.sharp.default(coverBuffer).webp().toBuffer()
+	} else {
+		throw new Boom(
+			'No image processing library (sharp) available for converting cover to WebP. Either install sharp or provide cover in WebP format.'
+		)
+	}
+
+	// Add cover to ZIP data
+	stickerData[trayIconFileName] = [new Uint8Array(coverWebpBuffer), { level: 0 as 0 }]
+
+	const zipData: Record<string, Uint8Array> = {}
+	for (const [fileName, [data]] of Object.entries(stickerData)) {
+		zipData[fileName] = data
+	}
+
+	const zipBuffer = createZipBuffer(zipData)
+	const stickerPackSize = zipBuffer.length
+
+	const stickerPackUpload = await encryptedStream(zipBuffer, 'sticker-pack', {
+		logger: options.logger,
+		opts: options.options
+	})
+
+	const stickerPackUploadResult = await options.upload(stickerPackUpload.encFilePath, {
+		fileEncSha256B64: stickerPackUpload.fileEncSha256.toString('base64'),
+		mediaType: 'sticker-pack',
+		timeoutMs: options.mediaUploadTimeoutMs
+	})
+
+	await fs.unlink(stickerPackUpload.encFilePath)
+
+	const stickerPackMessage: proto.Message.IStickerPackMessage = {
+		name: name,
+		publisher: publisher,
+		stickerPackId: stickerPackIdValue,
+		packDescription: description,
+		stickerPackOrigin: WAProto.Message.StickerPackMessage.StickerPackOrigin.USER_CREATED,
+		stickerPackSize: stickerPackSize,
+		stickers: stickerMetadata,
+
+		fileSha256: stickerPackUpload.fileSha256,
+		fileEncSha256: stickerPackUpload.fileEncSha256,
+		mediaKey: stickerPackUpload.mediaKey,
+		directPath: stickerPackUploadResult.directPath,
+		fileLength: stickerPackUpload.fileLength,
+		mediaKeyTimestamp: unixTimestampSeconds(),
+
+		trayIconFileName: trayIconFileName
+	}
+
+	try {
+		// Reuse the cover buffer we already processed for thumbnail generation
+		let thumbnailBuffer: Buffer
+
+		if ('sharp' in lib && lib.sharp) {
+			thumbnailBuffer = await lib.sharp.default(coverBuffer).resize(252, 252).jpeg().toBuffer()
+		} else if ('jimp' in lib && lib.jimp) {
+			const jimpImage = await lib.jimp.Jimp.read(coverBuffer)
+			thumbnailBuffer = await jimpImage.resize({ w: 252, h: 252 }).getBuffer('image/jpeg')
+		} else {
+			throw new Error('No image processing library available for thumbnail generation')
+		}
+
+		if (!thumbnailBuffer || thumbnailBuffer.length === 0) {
+			throw new Error('Failed to generate thumbnail buffer')
+		}
+
+		const thumbUpload = await encryptedStream(thumbnailBuffer, 'thumbnail-sticker-pack', {
+			logger: options.logger,
+			opts: options.options,
+			mediaKey: stickerPackUpload.mediaKey // Use same mediaKey as the sticker pack ZIP
+		})
+
+		const thumbUploadResult = await options.upload(thumbUpload.encFilePath, {
+			fileEncSha256B64: thumbUpload.fileEncSha256.toString('base64'),
+			mediaType: 'thumbnail-sticker-pack',
+			timeoutMs: options.mediaUploadTimeoutMs
+		})
+
+		await fs.unlink(thumbUpload.encFilePath)
+
+		Object.assign(stickerPackMessage, {
+			thumbnailDirectPath: thumbUploadResult.directPath,
+			thumbnailSha256: thumbUpload.fileSha256,
+			thumbnailEncSha256: thumbUpload.fileEncSha256,
+			thumbnailHeight: 252,
+			thumbnailWidth: 252,
+			imageDataHash: sha256(thumbnailBuffer).toString('base64')
+		})
+	} catch (e) {
+		options.logger?.warn?.(`Thumbnail generation failed: ${e}`)
+	}
+
+	return { stickerPackMessage }
 }
