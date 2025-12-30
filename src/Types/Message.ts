@@ -116,6 +116,16 @@ export type MediaConnInfo = {
 	fetchDate: Date
 }
 
+export interface Carousel {
+	image?: WAMediaUpload
+	video?: WAMediaUpload
+	product?: WASendableProduct
+	title?: string
+	body?: string
+	footer?: string
+	buttons?: proto.Message.InteractiveMessage.NativeFlowMessage.NativeFlowButton[]
+}
+
 export interface WAUrlInfo {
 	'canonical-url': string
 	'matched-text': string
@@ -138,6 +148,59 @@ type Contextable = {
 type ViewOnce = {
 	viewOnce?: boolean
 }
+
+type Buttonable = {
+	buttons?: proto.Message.ButtonsMessage.IButton[]
+	headerType?: number
+}
+
+type Templateable = {
+	templateButtons?: proto.IHydratedTemplateButton[]
+	footer?: string
+}
+
+type Interactiveable = {
+	interactiveButtons?: proto.Message.InteractiveMessage.NativeFlowMessage.INativeFlowButton[]
+	title?: string
+	subtitle?: string
+	footer?: string
+	hasMediaAttachment?: boolean
+}
+
+type Shopable = {
+	shop?: proto.Message.InteractiveMessage.ShopMessage
+	title?: string
+	subtitle?: string
+	footer?: string
+	hasMediaAttachment?: boolean
+}
+
+type Collectionable = {
+	collection?: proto.Message.InteractiveMessage.CollectionMessage
+	title?: string
+	subtitle?: string
+	footer?: string
+	hasMediaAttachment?: boolean
+}
+
+type Listable = {
+	/** Sections of the List */
+	sections?: proto.Message.ListMessage.ISection[]
+	/** Title of a List Message only */
+	title?: string
+	/** Text of the button on the list (required) */
+	buttonText?: string
+	/** ListType of a List Message only */
+	listType?: proto.Message.ListMessage.ListType
+}
+
+type Cardsable = {
+	cards?: Carousel[]
+	title?: string
+	subtitle?: string
+	footer?: string
+}
+
 
 type Editable = {
 	edit?: WAMessageKey
@@ -218,6 +281,10 @@ export type ButtonReplyInfo = {
 	displayText: string
 	id: string
 	index: number
+	title: string,
+	description: string,
+	rowid: string;
+	nativeFlows: proto.Message.InteractiveResponseMessage.INativeFlowResponseMessage
 }
 
 export type GroupInviteInfo = {
@@ -238,7 +305,7 @@ export type AnyRegularMessageContent = (
 		linkPreview?: WAUrlInfo | null
 	} & Mentionable &
 		Contextable &
-		Editable)
+		Editable & Buttonable & Templateable & Interactiveable & Shopable & Collectionable & Cardsable & Listable)
 	| AnyMediaMessageContent
 	| {
 		stickerPack: StickerPack
@@ -248,7 +315,7 @@ export type AnyRegularMessageContent = (
 		poll: PollMessageOptions
 	} & Mentionable &
 		Contextable &
-		Editable)
+		Editable & Mentionable & Contextable & Buttonable & Templateable & Interactiveable & Shopable & Collectionable & Cardsable & Listable)
 	| {
 		contacts: {
 			displayName?: string
@@ -261,7 +328,7 @@ export type AnyRegularMessageContent = (
 	| { react: proto.Message.IReactionMessage }
 	| {
 		buttonReply: ButtonReplyInfo
-		type: 'template' | 'plain'
+		type: 'template' | 'plain' | 'list' | 'interactive'
 	}
 	| {
 		groupInvite: GroupInviteInfo

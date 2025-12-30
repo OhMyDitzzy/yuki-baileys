@@ -478,6 +478,16 @@ export const generateWAMessageContent = async (
 		m.messageContextInfo.messageAddOnDurationInSecs = message.type === 1 ? message.time || 86400 : 0
 	} else if ('buttonReply' in message) {
 		switch (message.type) {
+			case 'list':
+				m.listResponseMessage = {
+					title: message.buttonReply.title,
+					description: message.buttonReply.description,
+					singleSelectReply: {
+						selectedRowId: message.buttonReply.rowid
+					},
+					listType: proto.Message.ListResponseMessage.ListType.SINGLE_SELECT
+				}
+				break
 			case 'template':
 				m.templateButtonReplyMessage = {
 					selectedDisplayText: message.buttonReply.displayText,
@@ -490,6 +500,19 @@ export const generateWAMessageContent = async (
 					selectedButtonId: message.buttonReply.id,
 					selectedDisplayText: message.buttonReply.displayText,
 					type: proto.Message.ButtonsResponseMessage.Type.DISPLAY_TEXT
+				}
+				break
+			case 'interactive':
+				m.interactiveResponseMessage = {
+					body: {
+						text: message.buttonReply.displayText,
+						format: proto.Message.InteractiveResponseMessage.Body.Format.EXTENSIONS_1
+					},
+					nativeFlowResponseMessage: {
+						name: message.buttonReply.nativeFlows.name,
+						paramsJson: message.buttonReply.nativeFlows.paramsJson,
+						version: message.buttonReply.nativeFlows.version
+					}
 				}
 				break
 		}
@@ -584,6 +607,158 @@ export const generateWAMessageContent = async (
 		}
 	} else {
 		m = await prepareWAMessageMedia(message, options)
+	}
+
+	if ('sections' in message && !!message.sections) {
+		const listMessage = {
+			title: message.title,
+			buttonText: message.buttonText,
+			footerText: message.footer,
+			// @ts-ignore
+			description: message.text,
+			sections: message.sections,
+			listType: proto.Message.ListMessage.ListType.SINGLE_SELECT
+		}
+
+		// @ts-ignore
+		listMessage.contextInfo = {
+			...(message.contextInfo || {}),
+			...(message.mentions ? { mentionedJid: message.mentions } : {})
+		}
+
+		m = { listMessage }
+
+		m.messageContextInfo = {
+			messageSecret: randomBytes(32)
+		}
+	}
+
+	else if ('buttons' in message && !!message.buttons) {
+		const buttonsMessage: any = {
+			// @ts-ignore
+			buttons: message.buttons.map(b => ({ ...b, type: proto.Message.ButtonsMessage.Button.Type.RESPONSE }))
+		}
+
+		if ('text' in message) {
+			buttonsMessage.contentText = message.text
+			buttonsMessage.headerType = proto.Message.ButtonsMessage.HeaderType.EMPTY
+		}
+
+		else {
+			if ('caption' in message) {
+				buttonsMessage.contentText = message.caption
+			}
+
+			const type: any = Object.keys(m)[0]!!.replace('Message', '').toUpperCase()
+
+			buttonsMessage.headerType = proto.Message.ButtonsMessage.HeaderType[type!!]
+
+			Object.assign(buttonsMessage, m)
+		}
+
+		if ('footer' in message && !!message.footer) {
+			buttonsMessage.footerText = message.footer
+		}
+
+		if ('title' in message && !!message.title) {
+			buttonsMessage.text = message.title
+			buttonsMessage.headerType = proto.Message.ButtonsMessage.HeaderType.TEXT
+		}
+
+		buttonsMessage.contextInfo = {
+			...(message.contextInfo || {}),
+			...(message.mentions ? { mentionedJid: message.mentions } : {})
+		}
+
+		m = { buttonsMessage }
+
+		m.messageContextInfo = {
+			messageSecret: randomBytes(32)
+		}
+	}
+
+	else if ('templateButtons' in message && !!message.templateButtons) {
+		const hydratedTemplate: any = {
+			hydratedButtons: message.templateButtons
+		}
+
+		if ('text' in message) {
+			hydratedTemplate.hydratedContentText = message.text
+		}
+
+		else {
+			if ('caption' in message) {
+				hydratedTemplate.hydratedContentText = message.caption
+			}
+
+			Object.assign(message, m)
+		}
+
+		if ('footer' in message && !!message.footer) {
+			hydratedTemplate.hydratedFooterText = message.footer
+		}
+
+		hydratedTemplate.contextInfo = {
+			...(message.contextInfo || {}),
+			...(message.mentions ? { mentionedJid: message.mentions } : {})
+		}
+
+		m = { templateMessage: { hydratedTemplate } }
+
+		m.messageContextInfo = {
+			messageSecret: randomBytes(32)
+		}
+	}
+
+	else if ('interactiveButtons' in message && !!message.interactiveButtons) {
+		const interactiveMessage: any = {
+			nativeFlowMessage: {
+				buttons: message.interactiveButtons
+			}
+		}
+
+		if ('text' in message) {
+			interactiveMessage.body = {
+				text: message.text
+			},
+				interactiveMessage.header = {
+					title: message.title,
+					subtitle: message.subtitle,
+					hasMediaAttachment: false
+				}
+		}
+
+		else {
+			if ('caption' in message) {
+				interactiveMessage.body = {
+					text: message.caption
+				}
+
+				interactiveMessage.header = {
+					title: message.title,
+					subtitle: message.subtitle,
+					hasMediaAttachment: message.hasMediaAttachment ? message.hasMediaAttachment : false,
+					...Object.assign(interactiveMessage, m)
+				}
+			}
+		}
+
+		if ('footer' in message && !!message.footer) {
+			interactiveMessage.footer = {
+				text: message.footer
+			}
+		}
+
+		interactiveMessage.contextInfo = {
+			...(message.contextInfo || {}),
+			...(message.mentions ? { mentionedJid: message.mentions } : {})
+		}
+
+		m = { interactiveMessage }
+
+		m.messageContextInfo = {
+			messageSecret: randomBytes(32)
+		}
 	}
 
 	if ('viewOnce' in message && !!message.viewOnce) {

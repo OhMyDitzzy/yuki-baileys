@@ -51,7 +51,8 @@ import {
 	jidEncode,
 	jidNormalizedUser,
 	type JidWithDevice,
-	S_WHATSAPP_NET
+	S_WHATSAPP_NET,
+	getBinaryFilteredButtons
 } from '../WABinary'
 import { USyncQuery, USyncUser } from '../WAUSync'
 import { makeNewsletterSocket } from './newsletter'
@@ -893,11 +894,11 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 
 				const encodedMessageToSend = isMe
 					? encodeWAMessage({
-							deviceSentMessage: {
-								destinationJid,
-								message
-							}
-						})
+						deviceSentMessage: {
+							destinationJid,
+							message
+						}
+					})
 					: encodeWAMessage(message)
 
 				const { type, ciphertext: encryptedContent } = await signalRepository.encryptMessage({
@@ -961,7 +962,7 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 			}
 
 			if (shouldIncludeDeviceIdentity) {
-				;(stanza.content as BinaryNode[]).push({
+				; (stanza.content as BinaryNode[]).push({
 					tag: 'device-identity',
 					attrs: {},
 					content: encodeSignedDeviceIdentity(authState.creds.account!, true)
@@ -970,13 +971,28 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 				logger.debug({ jid }, 'adding device identity')
 			}
 
+			const messages = normalizeMessageContent(message)
+			const buttonType = getButtonType(messages as proto.IMessage)
+
+			if (!isNewsletter && buttonType) {
+				const buttonsNode = getButtonArgs(messages as proto.IMessage)
+				const resultFilteredButtons = getBinaryFilteredButtons(additionalNodes ? additionalNodes : [])
+				if (resultFilteredButtons) {
+					// @ts-ignore
+					stanza.content.push(additionalNodes)
+				} else {
+					// @ts-ignore
+					stanza.content.push(buttonsNode)
+				}
+			}
+
 			const contactTcTokenData =
 				!isGroup && !isRetryResend && !isStatus ? await authState.keys.get('tctoken', [destinationJid]) : {}
 
 			const tcTokenBuffer = contactTcTokenData[destinationJid]?.token
 
 			if (tcTokenBuffer) {
-				;(stanza.content as BinaryNode[]).push({
+				; (stanza.content as BinaryNode[]).push({
 					tag: 'tctoken',
 					attrs: {},
 					content: tcTokenBuffer
@@ -984,7 +1000,7 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 			}
 
 			if (additionalNodes && additionalNodes.length > 0) {
-				;(stanza.content as BinaryNode[]).push(...additionalNodes)
+				; (stanza.content as BinaryNode[]).push(...additionalNodes)
 			}
 
 			logger.debug({ msgId }, `sending message to ${participants.length} devices`)
@@ -1033,7 +1049,7 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 			return 'livelocation'
 		} else if (message.stickerMessage) {
 			return 'sticker'
-	    } else if (message.stickerPackMessage) {
+		} else if (message.stickerPackMessage) {
 			return 'sticker_pack'
 		} else if (message.listMessage) {
 			return 'list'
@@ -1052,6 +1068,71 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 		}
 
 		return ''
+	}
+
+	const getButtonType = (message: proto.IMessage) => {
+		if (message.listMessage) {
+			return 'list'
+		} else if (message.buttonsMessage) {
+			return 'buttons'
+		} else if (message.templateMessage) {
+			return 'template'
+		} else if (message.interactiveMessage?.nativeFlowMessage) {
+			return 'native_flow'
+		}
+	}
+
+	const getButtonArgs = (message: proto.IMessage) => {
+		if (message.interactiveMessage?.nativeFlowMessage && message.interactiveMessage?.nativeFlowMessage?.buttons!!.length > 0 && message.interactiveMessage?.nativeFlowMessage?.buttons!![0]?.name === 'review_and_pay') {
+			return {
+				tag: 'biz',
+				attrs: {
+					native_flow_name: 'order_details'
+				}
+			}
+		} else if (message.interactiveMessage?.nativeFlowMessage || message.buttonsMessage) {
+			return {
+				tag: 'biz',
+				attrs: {},
+				content: [{
+					tag: 'interactive',
+					attrs: {
+						type: 'native_flow',
+						v: '1'
+					},
+					content: [{
+						tag: 'native_flow',
+						attrs: {
+							name: 'quick_reply'
+						}
+					}]
+				}]
+			}
+		} else if (message.listMessage) {
+			return {
+				tag: 'biz',
+				attrs: {},
+				content: [{
+					tag: 'list',
+					attrs: {
+						type: 'product_list',
+						v: '2'
+					}
+				}]
+			}
+		} else if (message.templateMessage) {
+			return {
+				tag: 'biz',
+				attrs: {},
+				content: [{
+					tag: 'hsm',
+					attrs: {
+						tag: 'AUTHENTICATION',
+						category: ''
+					}
+				}]
+			}
+		}
 	}
 
 	const getPrivacyTokens = async (jids: string[]) => {

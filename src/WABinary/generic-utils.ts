@@ -26,6 +26,25 @@ export const getBinaryNodeChild = (node: BinaryNode | undefined, childTag: strin
 	}
 }
 
+export const getBinaryFilteredButtons = (nodeContent: any) => {
+	if (!Array.isArray(nodeContent)) {
+		nodeContent = [[nodeContent]]
+	}
+	const filter = nodeContent.filter((item: any) =>
+		!(item.tag === 'biz' && item.content &&
+			item.content.some((tag: any) =>
+				(tag.tag === 'interactive' && tag.attrs.type === 'native_flow' && tag.attrs.v === '1') ||
+				(tag.tag === 'list' && tag.attrs.type === 'product_list' && tag.attrs.v === '2')
+			)
+		)
+	)
+	if (filter.length > 0) {
+		return true
+	} else {
+		return false
+	}
+}
+
 export const getBinaryNodeChildBuffer = (node: BinaryNode | undefined, childTag: string) => {
 	const child = getBinaryNodeChild(node, childTag)?.content
 	if (Buffer.isBuffer(child) || child instanceof Uint8Array) {
