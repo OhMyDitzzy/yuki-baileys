@@ -164,7 +164,7 @@ type EventContext = {
  * @param ctx additional info about the poll required for decryption
  * @returns list of SHA256 options
  */
-export function decryptPollVote(
+export async function decryptPollVote(
 	{ encPayload, encIv }: proto.Message.IPollEncValue,
 	{ pollCreatorJid, pollMsgId, pollEncKey, voterJid }: PollContext
 ) {
@@ -180,7 +180,7 @@ export function decryptPollVote(
 	const decKey = hmacSign(sign, key0, 'sha256')
 	const aad = toBinary(`${pollMsgId}\u0000${voterJid}`)
 
-	const decrypted = aesDecryptGCM(encPayload!, decKey, encIv!, aad)
+	const decrypted = await aesDecryptGCM(encPayload!, decKey, encIv!, aad)
 	return proto.Message.PollVoteMessage.decode(decrypted)
 
 	function toBinary(txt: string) {
@@ -194,7 +194,7 @@ export function decryptPollVote(
  * @param ctx additional info about the event required for decryption
  * @returns event response message
  */
-export function decryptEventResponse(
+export async function decryptEventResponse(
 	{ encPayload, encIv }: proto.Message.IPollEncValue,
 	{ eventCreatorJid, eventMsgId, eventEncKey, responderJid }: EventContext
 ) {
@@ -210,7 +210,7 @@ export function decryptEventResponse(
 	const decKey = hmacSign(sign, key0, 'sha256')
 	const aad = toBinary(`${eventMsgId}\u0000${responderJid}`)
 
-	const decrypted = aesDecryptGCM(encPayload!, decKey, encIv!, aad)
+	const decrypted = await aesDecryptGCM(encPayload!, decKey, encIv!, aad)
 	return proto.Message.EventResponseMessage.decode(decrypted)
 
 	function toBinary(txt: string) {
@@ -447,7 +447,7 @@ const processMessage = async (
 				if (!eventEncKey) {
 					logger?.warn({ creationMsgKey }, 'event response: missing messageSecret for decryption')
 				} else {
-					const responseMsg = decryptEventResponse(encEventResponse, {
+					const responseMsg = await decryptEventResponse(encEventResponse, {
 						eventEncKey,
 						eventCreatorJid,
 						eventMsgId: creationMsgKey.id!,

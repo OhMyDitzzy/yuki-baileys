@@ -33,8 +33,8 @@ export const makeNoiseHandler = ({
 		}
 	}
 
-	const encrypt = (plaintext: Uint8Array) => {
-		const result = aesEncryptGCM(plaintext, encKey, generateIV(writeCounter), hash)
+	const encrypt = async (plaintext: Uint8Array) => {
+		const result = await aesEncryptGCM(plaintext, encKey, generateIV(writeCounter), hash)
 
 		writeCounter += 1
 
@@ -42,11 +42,11 @@ export const makeNoiseHandler = ({
 		return result
 	}
 
-	const decrypt = (ciphertext: Uint8Array) => {
+	const decrypt = async (ciphertext: Uint8Array) => {
 		// before the handshake is finished, we use the same counter
 		// after handshake, the counters are different
 		const iv = generateIV(isFinished ? readCounter : writeCounter)
-		const result = aesDecryptGCM(ciphertext, decKey, iv, hash)
+		const result = await aesDecryptGCM(ciphertext, decKey, iv, hash)
 
 		if (isFinished) {
 			readCounter += 1
@@ -107,10 +107,10 @@ export const makeNoiseHandler = ({
 			authenticate(serverHello!.ephemeral!)
 			await mixIntoKey(Curve.sharedKey(privateKey, serverHello!.ephemeral!))
 
-			const decStaticContent = decrypt(serverHello!.static!)
+			const decStaticContent = await decrypt(serverHello!.static!)
 			await mixIntoKey(Curve.sharedKey(privateKey, decStaticContent))
 
-			const certDecoded = decrypt(serverHello!.payload!)
+			const certDecoded = await decrypt(serverHello!.payload!)
 
 			const { intermediate: certIntermediate /*leaf*/ } = proto.CertChain.decode(certDecoded)
 			// TODO: handle this leaf stuff
@@ -120,14 +120,14 @@ export const makeNoiseHandler = ({
 				throw new Boom('certification match failed', { statusCode: 400 })
 			}
 
-			const keyEnc = encrypt(noiseKey.public)
+			const keyEnc = await encrypt(noiseKey.public)
 			await mixIntoKey(Curve.sharedKey(noiseKey.private, serverHello!.ephemeral!))
 
 			return keyEnc
 		},
-		encodeFrame: (data: Buffer | Uint8Array) => {
+		encodeFrame: async (data: Buffer | Uint8Array) => {
 			if (isFinished) {
-				data = encrypt(data)
+				data = await encrypt(data)
 			}
 
 			let header: Buffer
@@ -178,7 +178,7 @@ export const makeNoiseHandler = ({
 				inBytes = inBytes.slice(size + 3)
 
 				if (isFinished) {
-					const result = decrypt(frame)
+					const result = await decrypt(frame)
 					frame = await decodeBinaryNode(result)
 				}
 

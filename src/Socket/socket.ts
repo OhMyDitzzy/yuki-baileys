@@ -116,7 +116,7 @@ export const makeSocket = (config: SocketConfig) => {
 			throw new Boom('Connection Closed', { statusCode: DisconnectReason.connectionClosed })
 		}
 
-		const bytes = noise.encodeFrame(data)
+		const bytes = await noise.encodeFrame(data)
 		await promiseTimeout<void>(connectTimeoutMs, async (resolve, reject) => {
 			try {
 				await sendPromise.call(ws, bytes)
@@ -426,7 +426,7 @@ export const makeSocket = (config: SocketConfig) => {
 			logger.info({ node }, 'logging in...')
 		}
 
-		const payloadEnc = noise.encrypt(proto.ClientPayload.encode(node).finish())
+		const payloadEnc = await noise.encrypt(proto.ClientPayload.encode(node).finish())
 		await sendRawMessage(
 			proto.HandshakeMessage.encode({
 				clientFinish: {

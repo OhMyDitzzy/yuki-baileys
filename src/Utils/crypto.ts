@@ -6,6 +6,10 @@ import type { KeyPair } from '../Types'
 // insure browser & node compatibility
 const { subtle } = globalThis.crypto
 
+// Detect Runtime.
+const isBun = typeof (globalThis as any).Bun !== 'undefined'
+const isNode = !isBun && typeof process !== 'undefined' && process.versions?.node
+
 /** prefix version byte to the pub keys, required for some curve crypto functions */
 export const generateSignalPubKey = (pubKey: Uint8Array | Buffer) =>
 	pubKey.length === 33 ? pubKey : Buffer.concat([KEY_BUNDLE_TYPE, pubKey])
@@ -46,29 +50,148 @@ export const signedKeyPair = (identityKeyPair: KeyPair, keyId: number) => {
 const GCM_TAG_LENGTH = 128 >> 3
 
 /**
- * encrypt AES 256 GCM;
- * where the tag tag is suffixed to the ciphertext
- * */
-export function aesEncryptGCM(plaintext: Uint8Array, key: Uint8Array, iv: Uint8Array, additionalData: Uint8Array) {
+ * Normalize Uint8Array to ensure it's backed by a proper ArrayBuffer
+ * This fixes TypeScript's BufferSource type issues with Web Crypto API
+ */
+function toBufferSource(arr: Uint8Array): BufferSource {
+	// Create new Uint8Array with clean ArrayBuffer (should not SharedArrayBuffer)
+	const buffer = new ArrayBuffer(arr.byteLength)
+	const view = new Uint8Array(buffer)
+	view.set(arr)
+	return view as BufferSource
+}
+
+/**
+ * decrypt AES 256 GCM using Web Crypto API (works in both Node.js and Bun)
+ */
+async function aesDecryptGCMWebCrypto(
+	ciphertext: Uint8Array, 
+	key: Uint8Array, 
+	iv: Uint8Array, 
+	additionalData: Uint8Array
+): Promise<Buffer> {
+	// Convert to BufferSource for Web Crypto API
+	const cryptoKey = await subtle.importKey(
+		'raw',
+		toBufferSource(key),
+		{ name: 'AES-GCM' },
+		false,
+		['decrypt']
+	)
+
+	// Decrypt
+	const decrypted = await subtle.decrypt(
+		{
+			name: 'AES-GCM',
+			iv: toBufferSource(iv),
+			additionalData: toBufferSource(additionalData),
+			tagLength: GCM_TAG_LENGTH * 8
+		},
+		cryptoKey,
+		toBufferSource(ciphertext)
+	)
+
+	return Buffer.from(decrypted)
+}
+
+/**
+ * decrypt AES 256 GCM using Node.js crypto module
+ */
+function aesDecryptGCMNode(
+	ciphertext: Uint8Array, 
+	key: Uint8Array, 
+	iv: Uint8Array, 
+	additionalData: Uint8Array
+): Buffer {
+	const decipher = createDecipheriv('aes-256-gcm', key, iv)
+	const enc = ciphertext.slice(0, ciphertext.length - GCM_TAG_LENGTH)
+	const tag = ciphertext.slice(ciphertext.length - GCM_TAG_LENGTH)
+	decipher.setAAD(additionalData)
+	decipher.setAuthTag(tag)
+	return Buffer.concat([decipher.update(enc), decipher.final()])
+}
+
+/**
+ * decrypt AES 256 GCM;
+ * where the auth tag is suffixed to the ciphertext
+ * Auto-detects runtime and uses appropriate implementation
+ */
+export async function aesDecryptGCM(
+	ciphertext: Uint8Array, 
+	key: Uint8Array, 
+	iv: Uint8Array, 
+	additionalData: Uint8Array
+): Promise<Buffer> {
+	if (isBun) {
+		// Use Web Crypto API for Bun
+		return await aesDecryptGCMWebCrypto(ciphertext, key, iv, additionalData)
+	} else {
+		// Use Node.js crypto for Node
+		return aesDecryptGCMNode(ciphertext, key, iv, additionalData)
+	}
+}
+
+/**
+ * encrypt AES 256 GCM using Web Crypto API
+ */
+async function aesEncryptGCMWebCrypto(
+	plaintext: Uint8Array, 
+	key: Uint8Array, 
+	iv: Uint8Array, 
+	additionalData: Uint8Array
+): Promise<Buffer> {
+	const cryptoKey = await subtle.importKey(
+		'raw',
+		toBufferSource(key),
+		{ name: 'AES-GCM' },
+		false,
+		['encrypt']
+	)
+
+	const encrypted = await subtle.encrypt(
+		{
+			name: 'AES-GCM',
+			iv: toBufferSource(iv),
+			additionalData: toBufferSource(additionalData),
+			tagLength: GCM_TAG_LENGTH * 8
+		},
+		cryptoKey,
+		toBufferSource(plaintext)
+	)
+
+	return Buffer.from(encrypted)
+}
+
+/**
+ * encrypt AES 256 GCM using Node.js crypto module
+ */
+function aesEncryptGCMNode(
+	plaintext: Uint8Array, 
+	key: Uint8Array, 
+	iv: Uint8Array, 
+	additionalData: Uint8Array
+): Buffer {
 	const cipher = createCipheriv('aes-256-gcm', key, iv)
 	cipher.setAAD(additionalData)
 	return Buffer.concat([cipher.update(plaintext), cipher.final(), cipher.getAuthTag()])
 }
 
 /**
- * decrypt AES 256 GCM;
- * where the auth tag is suffixed to the ciphertext
- * */
-export function aesDecryptGCM(ciphertext: Uint8Array, key: Uint8Array, iv: Uint8Array, additionalData: Uint8Array) {
-	const decipher = createDecipheriv('aes-256-gcm', key, iv)
-	// decrypt additional adata
-	const enc = ciphertext.slice(0, ciphertext.length - GCM_TAG_LENGTH)
-	const tag = ciphertext.slice(ciphertext.length - GCM_TAG_LENGTH)
-	// set additional data
-	decipher.setAAD(additionalData)
-	decipher.setAuthTag(tag)
-
-	return Buffer.concat([decipher.update(enc), decipher.final()])
+ * encrypt AES 256 GCM;
+ * where the tag is suffixed to the ciphertext
+ * Auto-detects runtime and uses appropriate implementation
+ */
+export async function aesEncryptGCM(
+	plaintext: Uint8Array, 
+	key: Uint8Array, 
+	iv: Uint8Array, 
+	additionalData: Uint8Array
+): Promise<Buffer> {
+	if (isBun) {
+		return await aesEncryptGCMWebCrypto(plaintext, key, iv, additionalData)
+	} else {
+		return aesEncryptGCMNode(plaintext, key, iv, additionalData)
+	}
 }
 
 export function aesEncryptCTR(plaintext: Uint8Array, key: Uint8Array, iv: Uint8Array) {
