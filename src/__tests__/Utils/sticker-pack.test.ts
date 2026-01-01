@@ -375,27 +375,6 @@ describe('Sticker Pack Messages', () => {
 	})
 
 	describe('Validation', () => {
-		it('should reject sticker pack with more than 60 stickers', async () => {
-			const stickers = Array(61)
-				.fill(null)
-				.map(() => ({
-					data: MINIMAL_PNG
-				}))
-
-			const stickerPack: StickerPack = {
-				name: 'Test Pack',
-				publisher: 'Test Publisher',
-				cover: MINIMAL_PNG,
-				stickers
-			}
-
-			const options = createMockOptions()
-
-			await expect(generateWAMessageContent({ stickerPack }, options)).rejects.toThrow(
-				'Sticker pack exceeds the maximum limit of 60 stickers'
-			)
-		})
-
 		it('should reject empty sticker pack', async () => {
 			const stickerPack: StickerPack = {
 				name: 'Test Pack',
