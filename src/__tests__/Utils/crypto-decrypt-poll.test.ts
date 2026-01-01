@@ -218,6 +218,6 @@ describe('Event Response Decryption', () => {
 
 		expect(decrypted).toBeDefined()
 		expect(decrypted.response).toBe(proto.Message.EventResponseMessage.EventResponseType.GOING)
-		expect(decrypted.timestampMs).toBe('1234567890000')
+		expect(decrypted.timestampMs?.toString()).toBe('1234567890000')
 	})
 })
