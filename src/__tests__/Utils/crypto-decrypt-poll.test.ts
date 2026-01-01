@@ -1,6 +1,7 @@
 import { aesDecryptGCM, aesEncryptGCM, hmacSign } from '../../Utils/crypto'
 import { decryptPollVote, decryptEventResponse } from '../../Utils/process-message'
 import { proto } from '../../../WAProto/index.js'
+import Long from 'long'
 
 describe('Crypto Functions Runtime Compatibility', () => {
 	describe('aesEncryptGCM & aesDecryptGCM', () => {
@@ -184,7 +185,7 @@ describe('Event Response Decryption', () => {
 		// Create a real event response message
 		const responseMsg = proto.Message.EventResponseMessage.encode({
 			response: proto.Message.EventResponseMessage.EventResponseType.GOING,
-			timestampMs: '1234567890000'
+			timestampMs: Long.fromString('1234567890000')
 		}).finish()
 
 		// Encrypt it using the same logic as WhatsApp
